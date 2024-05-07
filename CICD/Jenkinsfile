@@ -1,0 +1,100 @@
+pipeline {
+    agent any
+	environment{
+        //NEXUS_RELEASE_REPO ="mylibs-Release"
+        NEXUS_RELEASE_REPO ="nch-cherry-libs-Release"
+        //NEXUS_SNAP_REPO="mylibs-Snapshot"
+        NEXUS_SNAP_REPO="nch-cherry-libs-snapshot"
+        NEXUS_CENTRAL_REPO ="mylibs-maven-central"
+        NEXUS_GRP_REPO="mylibs-Group"
+        NEXUS_USER="admin"
+        NEXUS_PASS="admin"
+        NEXUS_VERSION = "nexus3"
+        NEXUS_PROTOCOL = "http"
+        NEXUSPORT="8081"
+        NEXUSIP = "18.233.62.44"
+        ARTVERSION = "${env.BUILD_ID}"
+        NEXUS_CREDENTIAL_ID ="nexus-credentials"
+		NEXUS_URL = "18.233.62.44:8081"
+		SONARSERVER="sonarserver"
+        SONARSCANNER="sonarscanner"
+    }
+ stages {
+        stage('Checkout') {
+            steps {
+              git branch: 'main', url: 'https://github.com/devsecopsmurali/crud-operations.git'
+           }
+        }
+
+        stage('Build') { 
+            steps {
+                  sh 'mvn -s settings.xml -DskipTests  clean install package'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            environment {
+                scannerHome = tool("${SONARSCANNER}") 
+            }
+
+            steps {
+                    withSonarQubeEnv('sonarserver') {
+                    sh '''${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=java_maven_project \
+                        -Dsonar.projectName=java_maven_project \
+                        -Dsonar.projectVersion=1.0 \
+                        -Dsonar.sources=src/ \
+                        -Dsonar.java.binaries=target/classes'''
+                    } 
+
+            }
+        }
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                            waitForQualityGate abortPipeline: true
+                            }
+                }
+        
+        }
+		 stage("Publish to Nexus Repository Manager") {
+            steps {
+                script {
+                    pom = readMavenPom file: "pom.xml";
+                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}");
+                    echo "${filesByGlob[0].name} ${filesByGlob[0].path} ${filesByGlob[0].directory} ${filesByGlob[0].length} ${filesByGlob[0].lastModified}"
+                    artifactPath = filesByGlob[0].path;
+                    artifactExists = fileExists artifactPath;
+                    if(artifactExists) {
+                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version} ARTVERSION";
+		nexusArtifactUploader(
+                            nexusVersion: NEXUS_VERSION,
+                            protocol: NEXUS_PROTOCOL,
+                            nexusUrl: NEXUS_URL,
+                            groupId: pom.groupId,
+                            version: pom.version,
+                            //repository: NEXUS_RELEASE_REPO,
+							repository: NEXUS_SNAP_REPO,
+                            credentialsId: NEXUS_CREDENTIAL_ID,
+                            artifacts: [
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: artifactPath,
+                                type: pom.packaging],
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: "pom.xml",
+                                type: "pom"]
+                            ]
+                        );
+                    } 
+		    else {
+                        error "*** File: ${artifactPath}, could not be found";
+                    }
+                }
+            }
+        
+
+    }
+ 
+    }
+}
